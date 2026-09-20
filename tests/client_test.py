@@ -414,3 +414,14 @@ class TestRedirect:
             media.transition_duration,
             autostart=autostart,
         )
+
+
+async def test_set_player_name_sends_playername_pref(client: SlimClient) -> None:
+    """The name is pushed as the LMS 'playername' setd pref (firmwareid 0, Z*)."""
+    client.send_frame = AsyncMock()  # type: ignore[method-assign]
+
+    await client.set_player_name("Küche")
+
+    client.send_frame.assert_awaited_once_with(
+        b"setd", b"\x00" + "Küche".encode() + b"\x00"
+    )

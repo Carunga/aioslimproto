@@ -234,6 +234,10 @@ class SlimClient:
             return self._device_name
         return f"{self.device_type}: {self.player_id}"
 
+    async def set_player_name(self, name: str) -> None:
+        """Set the player name on the device (LMS 'playername' pref, firmwareid 0)."""
+        await self.send_frame(b"setd", b"\x00" + name.encode("utf-8") + b"\x00")
+
     @property
     def volume_level(self) -> int:
         """Return current volume level of player."""

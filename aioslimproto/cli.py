@@ -1284,14 +1284,44 @@ class SlimProtoCLI:
             "count": len(menu_items[offset:limit]),
         }
 
-    def _handle_menustatus(
+    async def _build_home_menu(self, player_id: str) -> list[Any] | None:
+        """
+        Return the full home menu item list for a player.
+
+        Builds it through the regular command dispatch so an application provided
+        command handler (e.g. a library browser) contributes its menu entries too.
+        """
+        if not player_id:
+            return None
+        menu = await self._dispatch_command(
+            SlimCLICommand(
+                player_id=player_id,
+                command="menu",
+                args=[0, 100],
+                kwargs={},
+            )
+        )
+        items = menu.get("item_loop") if isinstance(menu, dict) else None
+        return items or None
+
+    async def _handle_menustatus(
         self,
         player_id: str,
         *args,
         **kwargs,
-    ) -> dict[str, Any]:
-        """Handle menustatus request from CLI."""
-        return None
+    ) -> list[Any] | None:
+        """
+        Handle menustatus request from CLI.
+
+        SqueezePlay subscribes to the menustatus channel and builds its (customizable)
+        home menu from the items it receives. Answer with the full home menu using the
+        'add' directive (as LMS does) so a freshly booted player shows the server-supplied
+        items immediately instead of waiting for the user to open a menu.
+        """
+        items = await self._build_home_menu(player_id)
+        if not items:
+            return None
+        return [player_id, items, "add", player_id]
 
     def _handle_displaystatus(
         self,
@@ -1342,7 +1372,9 @@ class SlimProtoCLI:
                 f"/{client.client_id}/slim/menustatus/{event.player_id}",
             )
         ):
-            menu = await self._handle_menu(event.player_id)
+            items = await self._build_home_menu(event.player_id)
+            if not items:
+                return
             with suppress(asyncio.QueueFull):
                 client.queue.put_nowait(
                     {
@@ -1350,8 +1382,8 @@ class SlimProtoCLI:
                         "id": sub["id"],
                         "data": [
                             event.player_id,
-                            menu["item_loop"],
-                            "replace",
+                            items,
+                            "add",
                             event.player_id,
                         ],
                         "ext": {"priority": sub["data"].get("priority")},

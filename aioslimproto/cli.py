@@ -782,6 +782,20 @@ class SlimProtoCLI:
                     err,
                     exc_info=err,
                 )
+                # Answer the request even on failure: a request left unanswered keeps
+                # the player's UI on a loading screen until it times out. Only reply
+                # when the request expects a response channel (subscriptions do not).
+                data = cometd_request.get("data") or {}
+                if response_channel := data.get("response"):
+                    with suppress(asyncio.QueueFull):
+                        client.queue.put_nowait(
+                            {
+                                "channel": response_channel,
+                                "id": cometd_request.get("id"),
+                                "data": None,
+                                "ext": {"priority": data.get("priority")},
+                            },
+                        )
 
         asyncio.create_task(_handle())
 
@@ -955,8 +969,11 @@ class SlimProtoCLI:
         **kwargs,
     ) -> ServerStatusResponse:
         """Handle server status command."""
+        # Devices sometimes send ['serverstatus', '-', '-', []]
         if start_index == "-":
             start_index = 0
+        if limit == "-":
+            limit = len(self.server.players)
         players: list[PlayerItem] = []
         for index, player in enumerate(self.server.players):
             if isinstance(start_index, int) and index < start_index:

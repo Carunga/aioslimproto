@@ -594,3 +594,30 @@ class TestCommandHandler:
         )
 
         assert response == encode_response("a5:41:d2:cd:cd:05", "mixer", "volume", "50")
+
+    @pytest.mark.asyncio
+    async def test_menustatus_returns_full_home_menu(
+        self, dummy_server: SlimServer
+    ) -> None:
+        """A menustatus request answers with the home menu and the 'add' directive."""
+        menu_items = [{"id": "ma_ha_scripts", "text": "HA scripts"}]
+        cli = SlimProtoCLI(
+            dummy_server,
+            command_handler=AsyncMock(return_value={"item_loop": menu_items}),
+        )
+
+        result = await cli._handle_menustatus("a5:41:d2:cd:cd:05")  # noqa: SLF001
+
+        assert result == ["a5:41:d2:cd:cd:05", menu_items, "add", "a5:41:d2:cd:cd:05"]
+
+    @pytest.mark.asyncio
+    async def test_menustatus_without_menu_items_returns_none(
+        self, dummy_server: SlimServer
+    ) -> None:
+        """An empty home menu yields no menustatus payload."""
+        cli = SlimProtoCLI(
+            dummy_server,
+            command_handler=AsyncMock(return_value={"item_loop": []}),
+        )
+
+        assert await cli._handle_menustatus("a5:41:d2:cd:cd:05") is None  # noqa: SLF001

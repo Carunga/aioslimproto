@@ -653,3 +653,73 @@ class TestPlayerDisplayName:
         result = await cli._handle_status(dummy_player.player_id)  # noqa: SLF001
 
         assert result["player_name"] == "Küchen Radio"
+
+
+class TestCometdLongPolling:
+    """The CometD long-poll wait must not hold up non-connect meta requests."""
+
+    @pytest.mark.asyncio
+    async def test_handshake_is_answered_immediately(
+        self, dummy_server: SlimServer
+    ) -> None:
+        """A handshake must not be held open for the long-poll timeout."""
+        cli = SlimProtoCLI(dummy_server)
+        request = Mock()
+        request.json = AsyncMock(
+            return_value=[
+                {
+                    "channel": "/meta/handshake",
+                    "id": "1",
+                    "version": "1.0",
+                    "supportedConnectionTypes": ["streaming"],
+                }
+            ]
+        )
+
+        response = await asyncio.wait_for(
+            cli._handle_cometd_client(request),  # noqa: SLF001
+            timeout=2,
+        )
+
+        assert response.status == 200
+
+    @pytest.mark.asyncio
+    async def test_long_poll_connect_returns_queued_event(
+        self, dummy_server: SlimServer
+    ) -> None:
+        """A connect long-poll still waits for and returns a queued event."""
+        cli = SlimProtoCLI(dummy_server)
+        handshake = Mock()
+        handshake.json = AsyncMock(
+            return_value=[
+                {
+                    "channel": "/meta/handshake",
+                    "id": "1",
+                    "version": "1.0",
+                    "supportedConnectionTypes": ["streaming"],
+                }
+            ]
+        )
+        await cli._handle_cometd_client(handshake)  # noqa: SLF001
+        clientid = next(iter(cli._cometd_clients))  # noqa: SLF001
+        cli._cometd_clients[clientid].queue.put_nowait(  # noqa: SLF001
+            {"channel": "/slim/test", "data": "event"}
+        )
+        request = Mock()
+        request.json = AsyncMock(
+            return_value=[
+                {
+                    "channel": "/meta/connect",
+                    "id": "2",
+                    "clientId": clientid,
+                    "connectionType": "long-polling",
+                }
+            ]
+        )
+
+        response = await asyncio.wait_for(
+            cli._handle_cometd_client(request),  # noqa: SLF001
+            timeout=2,
+        )
+
+        assert response.status == 200

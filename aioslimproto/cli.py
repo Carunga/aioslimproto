@@ -692,9 +692,15 @@ class SlimProtoCLI:
             "Connection": "keep-alive",
         }
         if not streaming:
-            # Long-polling mode: if we don't already have queued data messages,
-            # hold the connection open until a message arrives or timeout (30s).
-            if not any(
+            # Long-polling mode: only a connect/reconnect request is held open until a
+            # message arrives (or the timeout expires). Other meta requests (handshake,
+            # subscribe, ...) must be answered immediately: holding the handshake reply
+            # leaves the client in "connecting" for the whole timeout.
+            is_long_poll_connect = any(
+                msg.get("channel") in ("/meta/connect", "/meta/reconnect")
+                for msg in json_msg
+            )
+            if is_long_poll_connect and not any(
                 msg for msg in response if msg.get("channel", "").startswith("/slim/")
             ):
                 try:

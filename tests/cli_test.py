@@ -766,3 +766,33 @@ class TestPlaylistHandler:
 
         assert result["count"] == 0
         assert result["item_loop"] == []
+
+
+class TestStatusBaseMore:
+    """The status menu 'more' action differs between Now Playing and the playlist."""
+
+    @pytest.mark.asyncio
+    async def test_now_playing_more_opens_the_playlist(
+        self, dummy_server: SlimServer
+    ) -> None:
+        """On the now-playing screen, 'more' opens the queue."""
+        cli = SlimProtoCLI(dummy_server)
+
+        result = await cli._handle_status("a5:41:d2:cd:cd:05", "-", 10, menu="menu")  # noqa: SLF001
+
+        more = result["base"]["actions"]["more"]
+        assert more["nextWindow"] == "playlist"
+        assert "window" not in more
+
+    @pytest.mark.asyncio
+    async def test_playlist_more_is_the_context_menu(
+        self, dummy_server: SlimServer
+    ) -> None:
+        """In the playlist window, 'more' stays the per-row context menu."""
+        cli = SlimProtoCLI(dummy_server)
+
+        result = await cli._handle_status("a5:41:d2:cd:cd:05", 0, 200, menu="menu")  # noqa: SLF001
+
+        more = result["base"]["actions"]["more"]
+        assert more["cmd"] == ["contextmenu"]
+        assert more["window"] == {"isContextMenu": 1}

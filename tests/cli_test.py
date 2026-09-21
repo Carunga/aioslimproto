@@ -75,6 +75,7 @@ def dummy_player() -> SlimClient:
             volume_set=AsyncMock(),
             muted=False,
             mute=AsyncMock(),
+            presets=[],
         ),
     )
 
@@ -723,3 +724,45 @@ class TestCometdLongPolling:
         )
 
         assert response.status == 200
+
+
+class TestPlaylistHandler:
+    """The status menu can be served from an application-provided playlist page."""
+
+    @pytest.mark.asyncio
+    async def test_status_menu_uses_playlist_handler(
+        self, dummy_server: SlimServer
+    ) -> None:
+        """The status menu mode merges the playlist page from the handler."""
+        handler = AsyncMock(
+            return_value={
+                "count": 42,
+                "offset": 0,
+                "playlist_tracks": 42,
+                "playlist_cur_index": 3,
+                "item_loop": [
+                    {"text": "Track 1", "actions": {"go": {"cmd": ["playlist"]}}}
+                ],
+            }
+        )
+        cli = SlimProtoCLI(dummy_server, playlist_handler=handler)
+
+        result = await cli._handle_status("a5:41:d2:cd:cd:05", 0, 200, menu="menu")  # noqa: SLF001
+
+        assert result["count"] == 42
+        assert result["playlist_tracks"] == 42
+        assert result["playlist_cur_index"] == 3
+        assert result["item_loop"][0]["text"] == "Track 1"
+        handler.assert_awaited_once_with("a5:41:d2:cd:cd:05", 0, 200)
+
+    @pytest.mark.asyncio
+    async def test_status_menu_falls_back_without_handler(
+        self, dummy_server: SlimServer
+    ) -> None:
+        """Without a playlist handler the status menu keeps its built-in item_loop."""
+        cli = SlimProtoCLI(dummy_server)
+
+        result = await cli._handle_status("a5:41:d2:cd:cd:05", 0, 200, menu="menu")  # noqa: SLF001
+
+        assert result["count"] == 0
+        assert result["item_loop"] == []

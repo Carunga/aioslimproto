@@ -90,6 +90,10 @@ SlimCLICommandHandler = Callable[
     [SlimCLICommand], SlimCLICommandResponse | Awaitable[SlimCLICommandResponse]
 ]
 
+# optional application callback returning a playlist page for the status command:
+# (player_id, offset ("-" = from current, or an int), limit) -> LMS playlist block
+SlimPlaylistHandler = Callable[[str, "int | str", int], Awaitable[dict[str, Any] | None]]
+
 
 @dataclass
 class CometDClient:
@@ -156,6 +160,7 @@ class SlimProtoCLI:
     _periodic_task: asyncio.Task | None = None
     _cli_server: asyncio.Server | None = None
     command_handler: SlimCLICommandHandler | None = None
+    playlist_handler: SlimPlaylistHandler | None = None
 
     def __init__(
         self,
@@ -163,6 +168,7 @@ class SlimProtoCLI:
         cli_port: int | None = None,
         cli_port_json: int | None = 0,
         command_handler: SlimCLICommandHandler | None = None,
+        playlist_handler: SlimPlaylistHandler | None = None,
     ) -> None:
         """
         Initialize Telnet and/or Json interface CLI.
@@ -174,6 +180,7 @@ class SlimProtoCLI:
         self.cli_port_json = cli_port_json
         self.logger = server.logger.getChild("cli")
         self.command_handler = command_handler
+        self.playlist_handler = playlist_handler
         self._cometd_clients: dict[str, CometDClient] = {}
         self._player_map: dict[str, str] = {}
         self._apprunner: web.AppRunner | None = None
@@ -930,13 +937,34 @@ class SlimProtoCLI:
             while len(preset_loop) < 10:
                 preset_data.append({})
                 preset_loop.append(0)
+            # the playlist window pages through item_loop; let the application provide
+            # the real queue (it knows the queue size, the current index and the actions)
+            item_loop: list[dict[str, Any]] = [
+                menu_item_from_media_details(item)
+                for item in (player.current_media, player.next_media)
+                if item
+            ]
+            menu_count: int = len(playlist_items)
+            menu_offset: int | str = offset
+            menu_playlist_tracks: int = len(playlist_items)
+            menu_cur_index: int = 0
+            if self.playlist_handler is not None:
+                block = await self.playlist_handler(player_id, offset, limit)
+                if block:
+                    item_loop = block.get("item_loop") or item_loop
+                    menu_count = block.get("count", menu_count)
+                    menu_offset = block.get("offset", menu_offset)
+                    menu_playlist_tracks = block.get("playlist_tracks", menu_playlist_tracks)
+                    menu_cur_index = block.get("playlist_cur_index", menu_cur_index)
             result = {
                 **result,
                 "alarm_state": "none",
                 "alarm_snooze_seconds": 540,
                 "alarm_timeout_seconds": 3600,
-                "count": len(playlist_items),
-                "offset": offset,
+                "count": menu_count,
+                "offset": menu_offset,
+                "playlist_tracks": menu_playlist_tracks,
+                "playlist_cur_index": menu_cur_index,
                 "base": {
                     "actions": {
                         "more": {
@@ -950,13 +978,7 @@ class SlimProtoCLI:
                 },
                 "preset_loop": preset_loop,
                 "preset_data": preset_data,
-                "item_loop": [
-                    menu_item_from_media_details(
-                        item,
-                    )
-                    for item in (player.current_media, player.next_media)
-                    if item
-                ],
+                "item_loop": item_loop,
             }
         # additional details if contextmenu requested
         if bool(useContextMenu):

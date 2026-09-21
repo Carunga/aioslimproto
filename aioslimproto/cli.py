@@ -939,6 +939,24 @@ class SlimProtoCLI:
             while len(preset_loop) < 10:
                 preset_data.append({})
                 preset_loop.append(0)
+            # On the now-playing screen a long press triggers the window's "more" action;
+            # open the playlist there (the queue). Explicit-offset requests come from the
+            # playlist window itself, where "more" is the per-row context menu.
+            more_action: dict[str, Any] = {
+                "itemsParams": "params",
+                "window": {"isContextMenu": 1},
+                "cmd": ["contextmenu"],
+                "player": 0,
+                "params": {"context": "playlist", "menu": "track"},
+            }
+            if offset == "-":
+                more_action = {
+                    "itemsParams": "params",
+                    "cmd": ["jiveblankcommand"],
+                    "player": 0,
+                    "params": {},
+                    "nextWindow": "playlist",
+                }
             # the playlist window pages through item_loop; let the application provide
             # the real queue (it knows the queue size, the current index and the actions)
             item_loop: list[dict[str, Any]] = [
@@ -971,13 +989,7 @@ class SlimProtoCLI:
                 "playlist_cur_index": menu_cur_index,
                 "base": {
                     "actions": {
-                        "more": {
-                            "itemsParams": "params",
-                            "window": {"isContextMenu": 1},
-                            "cmd": ["contextmenu"],
-                            "player": 0,
-                            "params": {"context": "playlist", "menu": "track"},
-                        },
+                        "more": more_action,
                     },
                 },
                 "preset_loop": preset_loop,

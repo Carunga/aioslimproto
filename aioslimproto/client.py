@@ -96,6 +96,9 @@ class SlimClient:
         self._device_type: str = ""
         self._capabilities: dict[str, str] = {}
         self._device_name: str = ""
+        # name reported to the player/server UI (e.g. the Music Assistant name); falls
+        # back to the device name when not set
+        self.display_name: str | None = None
         self._powered: bool = False
         self._muted: bool = False
         self._state = PlayerState.STOPPED

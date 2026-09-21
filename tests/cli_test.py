@@ -10,7 +10,7 @@ from urllib.parse import quote
 
 import pytest
 
-from aioslimproto.cli import SlimProtoCLI
+from aioslimproto.cli import SlimProtoCLI, create_player_item
 from aioslimproto.client import SlimClient
 from aioslimproto.models import PlayerState
 from aioslimproto.server import SlimServer
@@ -621,3 +621,35 @@ class TestCommandHandler:
         )
 
         assert await cli._handle_menustatus("a5:41:d2:cd:cd:05") is None  # noqa: SLF001
+
+
+class TestPlayerDisplayName:
+    """The server-reported player name prefers the configured display name."""
+
+    def test_create_player_item_prefers_display_name(
+        self, dummy_player: SlimClient
+    ) -> None:
+        """A configured display name is used for the players list."""
+        dummy_player.display_name = "Küchen Radio"
+
+        assert create_player_item(0, dummy_player)["name"] == "Küchen Radio"
+
+    def test_create_player_item_falls_back_to_device_name(
+        self, dummy_player: SlimClient
+    ) -> None:
+        """Without a display name the device-reported name is used."""
+        dummy_player.display_name = None
+
+        assert create_player_item(0, dummy_player)["name"] == "Kitchen"
+
+    @pytest.mark.asyncio
+    async def test_status_reports_display_name(
+        self, dummy_player: SlimClient, dummy_server: SlimServer
+    ) -> None:
+        """The playerstatus name reflects the configured display name."""
+        dummy_player.display_name = "Küchen Radio"
+        cli = SlimProtoCLI(dummy_server)
+
+        result = await cli._handle_status(dummy_player.player_id)  # noqa: SLF001
+
+        assert result["player_name"] == "Küchen Radio"

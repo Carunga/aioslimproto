@@ -874,7 +874,7 @@ class SlimProtoCLI:
             playlist_items.append(player.next_media)
         # base details
         result = {
-            "player_name": player.name,
+            "player_name": getattr(player, "display_name", None) or player.name,
             "player_connected": int(player.connected),
             "player_needs_upgrade": 0,
             "player_is_upgrading": 0,
@@ -1533,7 +1533,7 @@ def create_player_item(playerindex: int, player: SlimClient) -> PlayerItem:
     return {
         "playerindex": str(playerindex),
         "playerid": player.player_id,
-        "name": player.name,
+        "name": getattr(player, "display_name", None) or player.name,
         "modelname": player.device_model,
         "connected": int(player.connected),
         "isplaying": 1 if player.state == PlayerState.PLAYING else 0,

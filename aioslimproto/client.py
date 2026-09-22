@@ -241,6 +241,24 @@ class SlimClient:
         """Set the player name on the device (LMS 'playername' pref, firmwareid 0)."""
         await self.send_frame(b"setd", b"\x00" + name.encode("utf-8") + b"\x00")
 
+    async def update_now_playing(self, metadata: MediaMetadata) -> None:
+        """
+        Update the now-playing metadata of the current stream.
+
+        Merges the given metadata into the current media, re-renders the display
+        and signals an update so the CLI re-advertises the new values (including
+        ``artwork_url``). Use this for streams that keep one URL (e.g. an external
+        bridge) so per-track title/artist/artwork still reach the device.
+
+        :param metadata: Metadata fields to merge (title, artist, album, image_url,
+            duration, ...). Unknown keys are ignored by consumers.
+        """
+        if self._current_media is None:
+            return
+        self._current_media.metadata.update(metadata)
+        await self._render_display()
+        self.signal_update()
+
     @property
     def volume_level(self) -> int:
         """Return current volume level of player."""

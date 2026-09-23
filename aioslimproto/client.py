@@ -34,6 +34,7 @@ from .const import (
     JIFFIES_EPOCH_MIN_ADJUST,
     JIFFIES_OFFSET_TRACKING_LIST_MIN,
     JIFFIES_OFFSET_TRACKING_LIST_SIZE,
+    NAME_REQUEST_TIMEOUT,
     PACKET_LATENCY,
 )
 from .display import SlimProtoDisplay
@@ -96,6 +97,8 @@ class SlimClient:
         self._device_type: str = ""
         self._capabilities: dict[str, str] = {}
         self._device_name: str = ""
+        # set once the player has answered the name request (setd 0)
+        self._name_received = asyncio.Event()
         # name reported to the player/server UI (e.g. the Music Assistant name); falls
         # back to the device name when not set
         self.display_name: str | None = None
@@ -860,8 +863,16 @@ class SlimClient:
         # Set some startup settings for the player
         await self.send_frame(b"vers", b"7.9")
         # request player to send the player name
+        self._name_received.clear()
         await self.send_frame(b"setd", struct.pack("B", 0xFE))
         await self.send_frame(b"setd", struct.pack("B", 0))
+        # wait for the name before announcing the player as connected: until then
+        # only the "<type>: <mac>" fallback name is known, and some server-side
+        # consumers (e.g. Music Assistant) report that placeholder back to the
+        # player, which a SqueezePlay device then adopts and persists
+        with suppress(TimeoutError):
+            async with timeout(NAME_REQUEST_TIMEOUT):
+                await self._name_received.wait()
         # restore last power and volume levels
         # NOTE: this can be improved by storing the previous volume/power levels
         # so they can be restored when the player (re)connects.
@@ -1218,8 +1229,13 @@ class SlimClient:
         self.logger.debug("SETD received - %s", data)
         data_id = data[0]
         if data_id == 0:
-            # received player name
-            self._device_name = data[1:-1].decode()
+            # received player name: squeezelite terminates it with a NUL byte,
+            # SqueezePlay (Radio/Touch/Controller) does not, so only strip a NUL
+            # if present instead of always dropping the last byte
+            self._device_name = (
+                data[1:].rstrip(b"\x00").decode("utf-8", errors="replace")
+            )
+            self._name_received.set()
             self.callback(self, EventType.PLAYER_NAME_RECEIVED, self._device_name)
             self.logger = logging.getLogger(__name__).getChild(self._device_name)
         if data_id == 0xFE:

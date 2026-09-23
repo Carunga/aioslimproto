@@ -9,6 +9,8 @@ FALLBACK_MODEL = "Squeezebox"
 FALLLBACK_FIRMWARE = "Unknown"
 FALLBACK_SAMPLE_RATE = 96000
 HEARTBEAT_INTERVAL = 5
+# how long a connecting player may take to report its name before it is announced
+NAME_REQUEST_TIMEOUT = 2  # s
 
 # ---------------------------------------------------------------------------
 # Synchronisation constants, ported 1:1 from Lyrion Music Server

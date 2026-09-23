@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, call
 import pytest
 
 from aioslimproto.client import SlimClient
-from aioslimproto.models import MediaDetails, PlayerState
+from aioslimproto.models import EventType, MediaDetails, PlayerState
 
 # a cont frame as LMS sends it: metaint (no ICY metadata), loop and guid count
 _CONT_PAYLOAD = struct.pack("!IBH", 0, 0, 0)
@@ -425,3 +425,81 @@ async def test_set_player_name_sends_playername_pref(client: SlimClient) -> None
     client.send_frame.assert_awaited_once_with(
         b"setd", b"\x00" + "Küche".encode() + b"\x00"
     )
+
+
+class TestProcessSetdName:
+    """_process_setd(data_id=0) decodes the name SqueezePlay/squeezelite report."""
+
+    async def test_squeezelite_name_has_trailing_nul(self, client: SlimClient) -> None:
+        """Squeezelite terminates the reported name with a NUL byte."""
+        client._process_setd(b"\x00" + "Küche".encode() + b"\x00")  # noqa: SLF001
+
+        assert client.name == "Küche"
+
+    async def test_squeezeplay_name_has_no_trailing_nul(
+        self, client: SlimClient
+    ) -> None:
+        """SqueezePlay (Radio/Touch/Controller) sends the name with no NUL byte.
+
+        Blindly dropping the last byte (as if it were always a NUL terminator)
+        truncated the name by one character on every reconnect.
+        """
+        client._process_setd(b"\x00" + "Küche".encode())  # noqa: SLF001
+
+        assert client.name == "Küche"
+
+    async def test_name_ending_in_multibyte_character(self, client: SlimClient) -> None:
+        """A name ending in a multi-byte UTF-8 character must not be corrupted."""
+        client._process_setd(b"\x00" + "Büro".encode())  # noqa: SLF001
+
+        assert client.name == "Büro"
+
+    async def test_fires_player_name_received(self, client: SlimClient) -> None:
+        """A PLAYER_NAME_RECEIVED event is signalled with the decoded name."""
+        client._process_setd(b"\x00" + "Küche".encode() + b"\x00")  # noqa: SLF001
+
+        client.callback.assert_any_call(client, EventType.PLAYER_NAME_RECEIVED, "Küche")
+
+
+async def test_helo_waits_for_the_device_name_before_connecting(
+    client: SlimClient,
+) -> None:
+    """PLAYER_CONNECTED is only signalled once the real device name is known.
+
+    Firing it before the name arrives leaves a "<type>: <mac>" placeholder as
+    the player's name, which server-side consumers can report back to the
+    device - and a SqueezePlay device then persists as its own name.
+    """
+    client.send_frame = AsyncMock()  # type: ignore[method-assign]
+    helo_data = (
+        struct.pack("BB6s", 4, 0, bytes.fromhex("aabbccddeeff"))
+        + b"\x00" * 28
+        + b"Model=squeezeplay,ModelName=SqueezePlay"
+    )
+
+    async def _answer_name_request(*_args: object, **_kwargs: object) -> None:
+        client._process_setd(b"\x00" + "Küche".encode())  # noqa: SLF001
+
+    client.send_frame.side_effect = _answer_name_request
+
+    await client._process_helo(helo_data)  # noqa: SLF001
+
+    assert client.name == "Küche"
+    client.callback.assert_any_call(client, EventType.PLAYER_CONNECTED)
+
+
+async def test_helo_gives_up_waiting_after_the_name_timeout(
+    client: SlimClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the device never answers, the player still connects with the fallback name."""
+    monkeypatch.setattr("aioslimproto.client.NAME_REQUEST_TIMEOUT", 0.01)
+    client.send_frame = AsyncMock()  # type: ignore[method-assign]
+    helo_data = (
+        struct.pack("BB6s", 4, 0, bytes.fromhex("aabbccddeeff"))
+        + b"\x00" * 28
+        + b"Model=squeezeplay,ModelName=SqueezePlay"
+    )
+
+    await client._process_helo(helo_data)  # noqa: SLF001
+
+    client.callback.assert_any_call(client, EventType.PLAYER_CONNECTED)

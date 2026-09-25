@@ -470,6 +470,11 @@ class SlimClient:
         await self.send_frame(b"aude", struct.pack("2B", power_int, 1))
         self._powered = powered
         self.signal_update()
+        # Dedicated power event: the CLI uses it to push the player's own status
+        # (which carries the power state) back to the device. SqueezePlay subscribes
+        # to that status and leaves standby from it, so without this a server
+        # power-on would not actually wake the device.
+        self.callback(self, EventType.PLAYER_POWER_UPDATED)
         await self._render_display()
 
     async def toggle_power(self) -> None:

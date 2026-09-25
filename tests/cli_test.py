@@ -10,9 +10,9 @@ from urllib.parse import quote
 
 import pytest
 
-from aioslimproto.cli import SlimProtoCLI, create_player_item
+from aioslimproto.cli import CometDClient, SlimProtoCLI, create_player_item
 from aioslimproto.client import SlimClient
-from aioslimproto.models import PlayerState
+from aioslimproto.models import EventType, PlayerState, SlimEvent
 from aioslimproto.server import SlimServer
 
 
@@ -796,3 +796,79 @@ class TestStatusBaseMore:
         more = result["base"]["actions"]["more"]
         assert more["cmd"] == ["contextmenu"]
         assert more["window"] == {"isContextMenu": 1}
+
+
+class TestPowerEventSubscriptions:
+    """A power change re-pushes the device's own status/displaystatus queries."""
+
+    @staticmethod
+    def _cometd_client() -> CometDClient:
+        """Build a CometD client subscribed to several player queries."""
+        client = CometDClient(client_id="cid", player_id="a5:41:d2:cd:cd:05")
+        client.slim_subscriptions["/slim/status"] = {
+            "id": 1,
+            "data": {
+                "response": "/slim/status",
+                "request": ["a5:41:d2:cd:cd:05", ["status", "-", 10]],
+            },
+        }
+        client.slim_subscriptions["/slim/displaystatus"] = {
+            "id": 2,
+            "data": {
+                "response": "/slim/displaystatus",
+                "request": [
+                    "a5:41:d2:cd:cd:05",
+                    ["displaystatus", "subscribe:showbriefly"],
+                ],
+            },
+        }
+        client.slim_subscriptions["/slim/serverstatus"] = {
+            "id": 3,
+            "data": {
+                "response": "/slim/serverstatus",
+                "request": ["", ["serverstatus", 0, 50]],
+            },
+        }
+        return client
+
+    @staticmethod
+    def _pushed_responses(cli: SlimProtoCLI) -> set[str]:
+        """Return the response channels the CLI re-sent during the event."""
+        return {
+            call.args[1]["data"]["response"]
+            for call in cli._handle_cometd_client_request.call_args_list  # noqa: SLF001
+        }
+
+    @pytest.mark.asyncio
+    async def test_power_event_pushes_status_and_displaystatus(
+        self, dummy_server: SlimServer
+    ) -> None:
+        """The device learns its new power from the pushed status query."""
+        cli = SlimProtoCLI(dummy_server)
+        cli._cometd_clients["cid"] = self._cometd_client()  # noqa: SLF001
+        cli._handle_cometd_client_request = Mock()  # noqa: SLF001
+
+        await cli._on_player_event(  # noqa: SLF001
+            SlimEvent(EventType.PLAYER_POWER_UPDATED, "a5:41:d2:cd:cd:05")
+        )
+
+        pushed = self._pushed_responses(cli)
+        assert "/slim/status" in pushed
+        assert "/slim/displaystatus" in pushed
+
+    @pytest.mark.asyncio
+    async def test_plain_update_does_not_push_status(
+        self, dummy_server: SlimServer
+    ) -> None:
+        """A regular update must not flood the device with a full status push."""
+        cli = SlimProtoCLI(dummy_server)
+        cli._cometd_clients["cid"] = self._cometd_client()  # noqa: SLF001
+        cli._handle_cometd_client_request = Mock()  # noqa: SLF001
+
+        await cli._on_player_event(  # noqa: SLF001
+            SlimEvent(EventType.PLAYER_UPDATED, "a5:41:d2:cd:cd:05")
+        )
+
+        pushed = self._pushed_responses(cli)
+        assert "/slim/status" not in pushed
+        assert "/slim/displaystatus" not in pushed

@@ -235,6 +235,7 @@ class SlimProtoCLI:
             self._on_player_event,
             (
                 EventType.PLAYER_UPDATED,
+                EventType.PLAYER_POWER_UPDATED,
                 EventType.PLAYER_CONNECTED,
                 EventType.PLAYER_PRESETS_UPDATED,
             ),
@@ -1138,6 +1139,14 @@ class SlimProtoCLI:
             return None
         if value == "?":
             return int(player.powered)
+        # A device power report is authoritative for the device's own state; log it
+        # so a disagreement with the server state is visible when debugging.
+        self.logger.debug(
+            "Power report from device %s: %s (server state: %s)",
+            player_id,
+            value,
+            player.powered,
+        )
         await player.power(bool(value))
         return None
 
@@ -1210,6 +1219,11 @@ class SlimProtoCLI:
             await player.volume_down()
             return
         if subcommand == "power":
+            self.logger.debug(
+                "Power button on device %s (server state: %s)",
+                player_id,
+                player.powered,
+            )
             await player.power(not player.powered)
             return
         if subcommand == "jump_fwd" and player.next_media:
@@ -1399,8 +1413,17 @@ class SlimProtoCLI:
         )
         if not client:
             return
-        # regular player updated (or connected) event, signal playerstatus
-        if event.type in (EventType.PLAYER_CONNECTED, EventType.PLAYER_UPDATED):
+        # Regular player updates/connects signal playerstatus + serverstatus. A power
+        # change additionally pushes the player's own status/displaystatus
+        # subscriptions: SqueezePlay subscribes to `status` (which carries the
+        # `power` field) and never to `playerstatus`, so this is what lets the device
+        # leave standby when the server powers it on (LMS sends serverstatus and
+        # playerstatus data on a 'power' event).
+        if event.type in (
+            EventType.PLAYER_CONNECTED,
+            EventType.PLAYER_UPDATED,
+            EventType.PLAYER_POWER_UPDATED,
+        ):
             if sub := client.slim_subscriptions.get(
                 f"/{client.client_id}/slim/playerstatus/{event.player_id}",
             ):
@@ -1409,6 +1432,19 @@ class SlimProtoCLI:
                 f"/{client.client_id}/slim/serverstatus",
             ):
                 self._handle_cometd_client_request(client, sub)
+            if event.type in (
+                EventType.PLAYER_CONNECTED,
+                EventType.PLAYER_POWER_UPDATED,
+            ):
+                for sub in client.slim_subscriptions.values():
+                    request = (sub.get("data") or {}).get("request") or []
+                    if (
+                        len(request) >= 2
+                        and isinstance(request[1], (list, tuple))
+                        and request[1]
+                        and request[1][0] in ("status", "displaystatus")
+                    ):
+                        self._handle_cometd_client_request(client, sub)
             return
         # player presets updated, signal menustatus event
         if event.type == EventType.PLAYER_PRESETS_UPDATED and (

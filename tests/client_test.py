@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, call
 import pytest
 
 from aioslimproto.client import SlimClient
-from aioslimproto.models import MediaDetails, PlayerState
+from aioslimproto.models import EventType, MediaDetails, PlayerState
 
 # a cont frame as LMS sends it: metaint (no ICY metadata), loop and guid count
 _CONT_PAYLOAD = struct.pack("!IBH", 0, 0, 0)
@@ -425,3 +425,38 @@ async def test_set_player_name_sends_playername_pref(client: SlimClient) -> None
     client.send_frame.assert_awaited_once_with(
         b"setd", b"\x00" + "Küche".encode() + b"\x00"
     )
+
+
+class TestPowerEvent:
+    """A power change emits a dedicated event so the CLI can push the status."""
+
+    @staticmethod
+    def _power_client(writer: Mock, events: list[EventType]) -> SlimClient:
+        """Create a SlimClient recording its emitted events."""
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+        slim_client = SlimClient(reader, writer, lambda *args: events.append(args[1]))
+        slim_client._send_strm = AsyncMock()  # noqa: SLF001
+        slim_client.send_frame = AsyncMock()
+        slim_client._render_display = AsyncMock()  # noqa: SLF001
+        return slim_client
+
+    @pytest.mark.asyncio
+    async def test_power_change_fires_power_event(self, writer: Mock) -> None:
+        """Turning the player on must emit PLAYER_POWER_UPDATED."""
+        events: list[EventType] = []
+        slim_client = self._power_client(writer, events)
+
+        await slim_client.power(powered=True)
+
+        assert EventType.PLAYER_POWER_UPDATED in events
+
+    @pytest.mark.asyncio
+    async def test_no_power_event_when_state_unchanged(self, writer: Mock) -> None:
+        """A no-op power command emits nothing (the client is already off)."""
+        events: list[EventType] = []
+        slim_client = self._power_client(writer, events)
+
+        await slim_client.power(powered=False)
+
+        assert EventType.PLAYER_POWER_UPDATED not in events

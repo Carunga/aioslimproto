@@ -11,6 +11,7 @@ class EventType(Enum):
     """Enum with possible slim proto client events."""
 
     PLAYER_UPDATED = "player_updated"
+    PLAYER_POWER_UPDATED = "player_power_updated"
     PLAYER_HEARTBEAT = "player_heartbeat"
     PLAYER_CONNECTED = "player_connected"
     PLAYER_DISCONNECTED = "player_disconnected"

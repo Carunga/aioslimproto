@@ -872,3 +872,88 @@ class TestPowerEventSubscriptions:
         pushed = self._pushed_responses(cli)
         assert "/slim/status" not in pushed
         assert "/slim/displaystatus" not in pushed
+
+    @pytest.mark.asyncio
+    async def test_mute_event_pushes_status_and_displaystatus(
+        self, dummy_server: SlimServer
+    ) -> None:
+        """The device learns a mute from the pushed status (negative volume)."""
+        cli = SlimProtoCLI(dummy_server)
+        cli._cometd_clients["cid"] = self._cometd_client()  # noqa: SLF001
+        cli._handle_cometd_client_request = Mock()  # noqa: SLF001
+
+        await cli._on_player_event(  # noqa: SLF001
+            SlimEvent(EventType.PLAYER_MUTE_UPDATED, "a5:41:d2:cd:cd:05")
+        )
+
+        pushed = self._pushed_responses(cli)
+        assert "/slim/status" in pushed
+        assert "/slim/displaystatus" in pushed
+
+
+class TestMuteCommand:
+    """Mixer status/volume: negative volume while muted, a device knob unmutes."""
+
+    @staticmethod
+    def _server(player: object) -> SlimServer:
+        return cast(
+            "SlimServer",
+            SimpleNamespace(
+                logger=logging.getLogger(),
+                get_player=lambda _player_id: player,
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_status_reports_negative_volume_when_muted(
+        self, dummy_player: SlimClient, dummy_server: SlimServer
+    ) -> None:
+        """LMS represents mute as a negative mixer volume."""
+        dummy_player.muted = True
+        dummy_player.volume_level = 50
+        cli = SlimProtoCLI(dummy_server)
+
+        result = await cli._handle_status("a5:41:d2:cd:cd:05", "-", 10)  # noqa: SLF001
+
+        assert result["mixer volume"] == -50
+        assert result["mixer muting"] == 1
+
+    @pytest.mark.asyncio
+    async def test_volume_query_is_signed_when_muted(self) -> None:
+        """A volume query returns the negative (muted) value."""
+        player = SimpleNamespace(volume_level=42, muted=True)
+        cli = SlimProtoCLI(self._server(player))
+
+        assert await cli._handle_mixer("pid", "volume", "?") == -42  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_device_volume_change_unmutes(self) -> None:
+        """Turning the volume on the device unmutes it (LMS behaviour)."""
+        player = SimpleNamespace(
+            volume_level=50,
+            muted=True,
+            volume_set=AsyncMock(),
+            mute=AsyncMock(),
+        )
+        cli = SlimProtoCLI(self._server(player))
+
+        await cli._handle_mixer("pid", "volume", 60)  # noqa: SLF001
+
+        player.volume_set.assert_awaited_once_with(60)
+        player.mute.assert_awaited_once_with(muted=False)
+
+    @pytest.mark.asyncio
+    async def test_device_volume_change_when_not_muted(self) -> None:
+        """An unmuted player just changes volume."""
+        player = SimpleNamespace(
+            volume_level=50,
+            muted=False,
+            volume_set=AsyncMock(),
+            mute=AsyncMock(),
+        )
+        cli = SlimProtoCLI(self._server(player))
+
+        await cli._handle_mixer("pid", "volume", 60)  # noqa: SLF001
+
+        player.volume_set.assert_awaited_once_with(60)
+        player.mute.assert_not_awaited()

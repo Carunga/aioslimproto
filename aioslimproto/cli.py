@@ -236,6 +236,7 @@ class SlimProtoCLI:
             (
                 EventType.PLAYER_UPDATED,
                 EventType.PLAYER_POWER_UPDATED,
+                EventType.PLAYER_MUTE_UPDATED,
                 EventType.PLAYER_CONNECTED,
                 EventType.PLAYER_PRESETS_UPDATED,
             ),
@@ -901,6 +902,9 @@ class SlimProtoCLI:
         cur_item = playlist_items[0] if playlist_items else None
         # additional details if player powered
         if player.powered:
+            # LMS represents mute as a negative mixer volume (and never lets the
+            # volume itself go below 0); SqueezePlay reads this to show/enter mute.
+            mixer_volume = -player.volume_level if player.muted else player.volume_level
             result = {
                 **result,
                 "mode": PLAYMODE_MAP[player.state],
@@ -910,7 +914,8 @@ class SlimProtoCLI:
                 "duration": cur_item.metadata.get("duration", 0) if cur_item else 0,
                 "sync_master": "",
                 "sync_slaves": "",
-                "mixer volume": player.volume_level,
+                "mixer volume": mixer_volume,
+                "mixer muting": int(player.muted),
                 "player_ip": player.device_address,
                 "playlist_cur_index": 0,
                 "playlist_tracks": len(playlist_items),
@@ -1082,18 +1087,25 @@ class SlimProtoCLI:
         if not player:
             return None
         # <playerid> mixer volume <0 .. 100|-100 .. +100|?>
-        if subcommand == "volume" and isinstance(arg, int) and arg >= 0:
-            await player.volume_set(arg)
-            return None
-        if subcommand == "volume" and arg == "?":
-            return player.volume_level
-        if subcommand == "volume" and isinstance(arg, str) and "+" in arg:
-            volume_level = min(100, player.volume_level + int(arg.split("+")[1]))
-            await player.volume_set(volume_level)
-            return None
-        if subcommand == "volume" and isinstance(arg, int) and arg < 0:
-            volume_level = max(0, player.volume_level + arg)
-            await player.volume_set(volume_level)
+        if subcommand == "volume":
+            if arg == "?":
+                # LMS reports a negative volume while the player is muted.
+                return -player.volume_level if player.muted else player.volume_level
+            if isinstance(arg, int):
+                # A negative value is a relative change, a positive one absolute.
+                volume_level = player.volume_level + arg if arg < 0 else arg
+            elif isinstance(arg, str) and "+" in arg:
+                volume_level = player.volume_level + int(arg.split("+")[1])
+            else:
+                raise NotImplementedError(f"No handler for mixer/volume/{arg}")
+            volume_level = max(0, min(100, volume_level))
+            if player.muted:
+                # A volume change on the device unmutes (LMS): apply the level while
+                # still muted (gain stays 0), then restore the gain.
+                await player.volume_set(volume_level)
+                await player.mute(muted=False)
+            else:
+                await player.volume_set(volume_level)
             return None
 
         # <playerid> mixer muting <0|1|[toggle]|?|>
@@ -1413,16 +1425,17 @@ class SlimProtoCLI:
         )
         if not client:
             return
-        # Regular player updates/connects signal playerstatus + serverstatus. A power
-        # change additionally pushes the player's own status/displaystatus
-        # subscriptions: SqueezePlay subscribes to `status` (which carries the
-        # `power` field) and never to `playerstatus`, so this is what lets the device
-        # leave standby when the server powers it on (LMS sends serverstatus and
-        # playerstatus data on a 'power' event).
+        # Regular player updates/connects signal playerstatus + serverstatus. Power and
+        # mute changes additionally push the player's own status/displaystatus
+        # subscriptions: SqueezePlay subscribes to `status` (which carries `power` and
+        # the mixer volume/mute fields) and never to `playerstatus`. This is how the
+        # device leaves standby on a server power-on, and how it shows a mute (status
+        # reports a negative `mixer volume`), mirroring LMS.
         if event.type in (
             EventType.PLAYER_CONNECTED,
             EventType.PLAYER_UPDATED,
             EventType.PLAYER_POWER_UPDATED,
+            EventType.PLAYER_MUTE_UPDATED,
         ):
             if sub := client.slim_subscriptions.get(
                 f"/{client.client_id}/slim/playerstatus/{event.player_id}",
@@ -1435,6 +1448,7 @@ class SlimProtoCLI:
             if event.type in (
                 EventType.PLAYER_CONNECTED,
                 EventType.PLAYER_POWER_UPDATED,
+                EventType.PLAYER_MUTE_UPDATED,
             ):
                 for sub in client.slim_subscriptions.values():
                     request = (sub.get("data") or {}).get("request") or []

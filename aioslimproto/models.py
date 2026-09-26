@@ -12,6 +12,7 @@ class EventType(Enum):
 
     PLAYER_UPDATED = "player_updated"
     PLAYER_POWER_UPDATED = "player_power_updated"
+    PLAYER_MUTE_UPDATED = "player_mute_updated"
     PLAYER_HEARTBEAT = "player_heartbeat"
     PLAYER_CONNECTED = "player_connected"
     PLAYER_DISCONNECTED = "player_disconnected"

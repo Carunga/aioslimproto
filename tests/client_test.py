@@ -48,6 +48,17 @@ async def live_client(writer: Mock) -> SlimClient:
     return slim_client
 
 
+@pytest.fixture
+async def mute_client(writer: Mock) -> SlimClient:
+    """Create a SlimClient for volume/mute tests with its frame senders stubbed."""
+    reader = asyncio.StreamReader()
+    reader.feed_eof()
+    slim_client = SlimClient(reader, writer, Mock())
+    slim_client.send_frame = AsyncMock()
+    slim_client._render_display = AsyncMock()  # noqa: SLF001
+    return slim_client
+
+
 def _enqueue_next_media(client: SlimClient) -> MediaDetails:
     """Simulate a track already enqueued via play_url(enqueue=True)."""
     media = MediaDetails(url="http://example.com/next.mp3")
@@ -460,3 +471,75 @@ class TestPowerEvent:
         await slim_client.power(powered=False)
 
         assert EventType.PLAYER_POWER_UPDATED not in events
+
+
+def _audg_new_gain(frame_sender: AsyncMock) -> int:
+    """Return the packed new left/right gain of the last audg frame."""
+    _command, data = frame_sender.await_args.args
+    return struct.unpack("!LLBBLL", data)[4]
+
+
+class TestMute:
+    """Mute sends a zero gain; it must not touch the `aude` audio-enable frame."""
+
+    @pytest.mark.asyncio
+    async def test_mute_sends_zero_gain_and_no_aude(
+        self, mute_client: SlimClient
+    ) -> None:
+        """Muting silences via gain 0 and leaves `aude` (power/DAC) alone."""
+        await mute_client.mute(muted=True)
+
+        mute_client.send_frame.assert_awaited_once()  # type: ignore[attr-defined]
+        command, _data = mute_client.send_frame.await_args.args  # type: ignore[attr-defined]
+        assert command == b"audg"
+        assert _audg_new_gain(mute_client.send_frame) == 0  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_unmute_restores_the_logical_volume(
+        self, mute_client: SlimClient
+    ) -> None:
+        """Unmuting sends the gain for the current volume again."""
+        mute_client.volume_control.volume = 40
+        await mute_client.mute(muted=True)
+        mute_client.send_frame.reset_mock()  # type: ignore[attr-defined]
+
+        await mute_client.mute(muted=False)
+
+        command, _data = mute_client.send_frame.await_args.args  # type: ignore[attr-defined]
+        expected_gain = mute_client.volume_control.new_gain(40)
+        assert command == b"audg"
+        assert _audg_new_gain(mute_client.send_frame) == expected_gain  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_volume_set_while_muted_keeps_gain_zero(
+        self, mute_client: SlimClient
+    ) -> None:
+        """Changing volume while muted updates the level but stays silent."""
+        await mute_client.mute(muted=True)
+        mute_client.send_frame.reset_mock()  # type: ignore[attr-defined]
+
+        await mute_client.volume_set(30)
+
+        assert mute_client.volume_level == 30
+        assert _audg_new_gain(mute_client.send_frame) == 0  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_noop_mute_sends_nothing(self, mute_client: SlimClient) -> None:
+        """Muting an already-unmuted player does nothing."""
+        await mute_client.mute(muted=False)
+
+        mute_client.send_frame.assert_not_called()  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_mute_change_fires_mute_event(self, writer: Mock) -> None:
+        """A mute change emits PLAYER_MUTE_UPDATED so the CLI can push the status."""
+        events: list[EventType] = []
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+        slim_client = SlimClient(reader, writer, lambda *args: events.append(args[1]))
+        slim_client.send_frame = AsyncMock()
+        slim_client._render_display = AsyncMock()  # noqa: SLF001
+
+        await slim_client.mute(muted=True)
+
+        assert EventType.PLAYER_MUTE_UPDATED in events

@@ -481,52 +481,57 @@ class SlimClient:
         """Toggle power command."""
         await self.power(not self.powered)
 
+    async def _send_audg(self, volume: int) -> None:
+        """Send an audg (gain) frame for the given volume."""
+        old_gain = self.volume_control.old_gain(volume)
+        new_gain = self.volume_control.new_gain(volume)
+        await self.send_frame(
+            b"audg",
+            struct.pack("!LLBBLL", old_gain, old_gain, 1, 255, new_gain, new_gain),
+        )
+
     async def volume_set(self, volume_level: int) -> None:
         """Send new volume level command to player."""
         if volume_level == self.volume_control.volume:
             return
         self.volume_control.volume = volume_level
-        old_gain = self.volume_control.old_gain()
-        new_gain = self.volume_control.new_gain()
-        await self.send_frame(
-            b"audg",
-            struct.pack("!LLBBLL", old_gain, old_gain, 1, 255, new_gain, new_gain),
-        )
+        # While muted the logical volume is updated but the gain stays 0 (unmuting
+        # restores this level).
+        await self._send_audg(0 if self._muted else volume_level)
         self.signal_update()
         await self._render_display("show_volume")
 
     async def volume_up(self) -> None:
         """Send volume up command to player."""
         self.volume_control.increment()
-        old_gain = self.volume_control.old_gain()
-        new_gain = self.volume_control.new_gain()
-        await self.send_frame(
-            b"audg",
-            struct.pack("!LLBBLL", old_gain, old_gain, 1, 255, new_gain, new_gain),
-        )
+        await self._send_audg(0 if self._muted else self.volume_control.volume)
         self.signal_update()
         await self._render_display("show_volume")
 
     async def volume_down(self) -> None:
         """Send volume down command to player."""
         self.volume_control.decrement()
-        old_gain = self.volume_control.old_gain()
-        new_gain = self.volume_control.new_gain()
-        await self.send_frame(
-            b"audg",
-            struct.pack("!LLBBLL", old_gain, old_gain, 1, 255, new_gain, new_gain),
-        )
+        await self._send_audg(0 if self._muted else self.volume_control.volume)
         self.signal_update()
         await self._render_display("show_volume")
 
     async def mute(self, muted: bool = False) -> None:
-        """Send mute command to player."""
+        """
+        Send mute command to player.
+
+        Muting sends a zero gain instead of an ``aude`` audio-enable frame (which
+        would disable the DAC and fight with the power state). The logical volume is
+        kept, so unmuting restores it.
+        """
         if self._muted == muted:
             return
-        muted_int = 0 if muted else 1
-        await self.send_frame(b"aude", struct.pack("2B", muted_int, 0))
         self._muted = muted
+        await self._send_audg(0 if muted else self.volume_control.volume)
         self.signal_update()
+        # Dedicated mute event: the CLI uses it to push the player's status, whose
+        # `mixer volume` is negative while muted (LMS convention). A zero-gain audg
+        # alone is not a reliable mute once the device's own volume control moves.
+        self.callback(self, EventType.PLAYER_MUTE_UPDATED)
 
     async def next(self) -> None:
         """Play next URL on the player (if a next url is enqueued)."""

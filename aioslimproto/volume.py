@@ -153,15 +153,25 @@ class SlimProtoVolume:
         self.volume -= self.step
         self.volume = max(self.volume, self.minimum)
 
-    def old_gain(self) -> int:
-        """Return the "Old" gain value as required by the squeezebox."""
-        if self.volume <= 0:
-            return 0
-        return self.old_map[self.volume]
+    def old_gain(self, volume: int | None = None) -> int:
+        """
+        Return the "Old" gain value as required by the squeezebox.
 
-    def decibels(self) -> float:
-        """Return the "new" gain value in decibels."""
+        :param volume: Volume to compute for, defaults to the current volume.
+        """
+        volume = self.volume if volume is None else volume
+        if volume <= 0:
+            return 0
+        return self.old_map[volume]
+
+    def decibels(self, volume: int | None = None) -> float:
+        """
+        Return the "new" gain value in decibels.
+
+        :param volume: Volume to compute for, defaults to the current volume.
+        """
         # ruff: noqa: ERA001
+        volume = self.volume if volume is None else volume
 
         step_db = self.total_volume_range * self.step_fraction
         max_volume_db = 0  # different on the boom?
@@ -173,7 +183,7 @@ class SlimProtoVolume:
         # y2 = m(x2 - x1) + y1
         slope_high = (max_volume_db - step_db) / (100.0 - self.step_point)
         slope_low = (step_db - self.total_volume_range) / (self.step_point - 0.0)
-        x2 = self.volume
+        x2 = volume
         if x2 > self.step_point:
             m = slope_high
             x1 = 100
@@ -184,11 +194,16 @@ class SlimProtoVolume:
             y1 = self.total_volume_range
         return m * (x2 - x1) + y1
 
-    def new_gain(self) -> float:
-        """Return new gainvalue of the volume control."""
-        if self.volume <= 0:
+    def new_gain(self, volume: int | None = None) -> float:
+        """
+        Return new gainvalue of the volume control.
+
+        :param volume: Volume to compute for, defaults to the current volume.
+        """
+        volume = self.volume if volume is None else volume
+        if volume <= 0:
             return 0
-        decibel = self.decibels()
+        decibel = self.decibels(volume)
         floatmult = 10 ** (decibel / 20.0)
         # avoid rounding errors somehow
         if -30 <= decibel <= 0:

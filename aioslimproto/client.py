@@ -467,13 +467,15 @@ class SlimClient:
         if not powered:
             await self.stop()
         power_int = 1 if powered else 0
-        await self.send_frame(b"aude", struct.pack("2B", power_int, 1))
+        # `aude` = (spdif_enable, dac_enable); LMS sets both bytes to the power state
+        # (01 01 on, 00 00 off), so a power-off also disables the DAC.
+        await self.send_frame(b"aude", struct.pack("2B", power_int, power_int))
         self._powered = powered
         self.signal_update()
         # Dedicated power event: the CLI uses it to push the player's own status
-        # (which carries the power state) back to the device. SqueezePlay subscribes
-        # to that status and leaves standby from it, so without this a server
-        # power-on would not actually wake the device.
+        # (which carries the power state) and home menu back to the device.
+        # SqueezePlay subscribes to those and leaves standby from them, so without
+        # this a server power-on would not actually wake the device.
         self.callback(self, EventType.PLAYER_POWER_UPDATED)
         await self._render_display()
 

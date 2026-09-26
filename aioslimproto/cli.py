@@ -1459,30 +1459,39 @@ class SlimProtoCLI:
                         and request[1][0] in ("status", "displaystatus")
                     ):
                         self._handle_cometd_client_request(client, sub)
+            if event.type == EventType.PLAYER_POWER_UPDATED:
+                # LMS refreshes the device's home menu (with the playerpower item)
+                # on power changes (Slim::Control::Jive::playerPower).
+                await self._push_menustatus(client, event.player_id)
             return
         # player presets updated, signal menustatus event
-        if event.type == EventType.PLAYER_PRESETS_UPDATED and (
-            sub := client.slim_subscriptions.get(
-                f"/{client.client_id}/slim/menustatus/{event.player_id}",
+        if event.type == EventType.PLAYER_PRESETS_UPDATED:
+            await self._push_menustatus(client, event.player_id)
+
+    async def _push_menustatus(self, client: CometDClient, player_id: str) -> None:
+        """Push the player's home menu (menustatus) to a subscribed device."""
+        sub = client.slim_subscriptions.get(
+            f"/{client.client_id}/slim/menustatus/{player_id}",
+        )
+        if not sub:
+            return
+        items = await self._build_home_menu(player_id)
+        if not items:
+            return
+        with suppress(asyncio.QueueFull):
+            client.queue.put_nowait(
+                {
+                    "channel": sub["data"]["response"],
+                    "id": sub["id"],
+                    "data": [
+                        player_id,
+                        items,
+                        "add",
+                        player_id,
+                    ],
+                    "ext": {"priority": sub["data"].get("priority")},
+                },
             )
-        ):
-            items = await self._build_home_menu(event.player_id)
-            if not items:
-                return
-            with suppress(asyncio.QueueFull):
-                client.queue.put_nowait(
-                    {
-                        "channel": sub["data"]["response"],
-                        "id": sub["id"],
-                        "data": [
-                            event.player_id,
-                            items,
-                            "add",
-                            event.player_id,
-                        ],
-                        "ext": {"priority": sub["data"].get("priority")},
-                    },
-                )
 
     async def _do_periodic(self) -> None:
         """Execute periodic sending of state and cleanup."""

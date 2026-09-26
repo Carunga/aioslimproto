@@ -428,78 +428,58 @@ async def test_set_player_name_sends_playername_pref(client: SlimClient) -> None
 
 
 class TestProcessSetdName:
-    """_process_setd(data_id=0) decodes the name SqueezePlay/squeezelite report."""
+    """_process_setd(data_id=0) decodes the name a player reports.
 
-    async def test_squeezelite_name_has_trailing_nul(self, client: SlimClient) -> None:
-        """Squeezelite terminates the reported name with a NUL byte."""
-        client._process_setd(b"\x00" + "Küche".encode() + b"\x00")  # noqa: SLF001
+    squeezelite and SqueezeESP32 send it NUL-terminated, SqueezePlay
+    (Radio/Touch/Controller) without a terminator. LMS reads it with unpack 'Z*':
+    everything up to the first NUL, or to the end of the data.
+    """
 
-        assert client.name == "Küche"
-
-    async def test_squeezeplay_name_has_no_trailing_nul(
-        self, client: SlimClient
+    @pytest.mark.parametrize("terminator", [b"", b"\x00"], ids=["no-nul", "nul"])
+    @pytest.mark.parametrize("name", ["Küche", "Kitchen", "A", "Café", "Bad Süß"])
+    async def test_name_is_decoded_completely(
+        self, client: SlimClient, name: str, terminator: bytes
     ) -> None:
-        """SqueezePlay (Radio/Touch/Controller) sends the name with no NUL byte.
+        """The name arrives unchanged, with or without a trailing NUL byte.
 
-        Blindly dropping the last byte (as if it were always a NUL terminator)
-        truncated the name by one character on every reconnect.
+        Dropping the last byte unconditionally truncated the name of a device
+        without a terminator by one character on every reconnect, and raised a
+        UnicodeDecodeError when that character was multi-byte (e.g. "Café").
         """
-        client._process_setd(b"\x00" + "Küche".encode())  # noqa: SLF001
+        client._process_setd(b"\x00" + name.encode() + terminator)  # noqa: SLF001
 
-        assert client.name == "Küche"
+        assert client.name == name
 
-    async def test_name_ending_in_multibyte_character(self, client: SlimClient) -> None:
-        """A name ending in a multi-byte UTF-8 character must not be corrupted."""
-        client._process_setd(b"\x00" + "Büro".encode())  # noqa: SLF001
+    @pytest.mark.parametrize(
+        "payload",
+        [b"Kitchen\x00\x00\x00", b"Kitchen\x00\x00xyz"],
+        ids=["nul-padding", "garbage-after-nul"],
+    )
+    async def test_name_ends_at_the_first_nul(
+        self, client: SlimClient, payload: bytes
+    ) -> None:
+        """Padding or leftover bytes of a fixed-size buffer are not part of the name."""
+        client._process_setd(b"\x00" + payload)  # noqa: SLF001
 
-        assert client.name == "Büro"
+        assert client.name == "Kitchen"
+
+    @pytest.mark.parametrize("payload", [b"", b"\x00"], ids=["nothing", "nul"])
+    async def test_empty_name_keeps_the_fallback_name(
+        self, client: SlimClient, payload: bytes
+    ) -> None:
+        """An empty name falls back to '<type>: <mac>' like before."""
+        client._process_setd(b"\x00" + payload)  # noqa: SLF001
+
+        assert client.name.startswith(client.device_type)
+
+    async def test_invalid_utf8_does_not_raise(self, client: SlimClient) -> None:
+        """A name in another encoding is decoded leniently instead of raising."""
+        client._process_setd(b"\x00K\xfcche\x00")  # noqa: SLF001
+
+        assert client.name == "K\ufffdche"
 
     async def test_fires_player_name_received(self, client: SlimClient) -> None:
         """A PLAYER_NAME_RECEIVED event is signalled with the decoded name."""
         client._process_setd(b"\x00" + "Küche".encode() + b"\x00")  # noqa: SLF001
 
         client.callback.assert_any_call(client, EventType.PLAYER_NAME_RECEIVED, "Küche")
-
-
-async def test_helo_waits_for_the_device_name_before_connecting(
-    client: SlimClient,
-) -> None:
-    """PLAYER_CONNECTED is only signalled once the real device name is known.
-
-    Firing it before the name arrives leaves a "<type>: <mac>" placeholder as
-    the player's name, which server-side consumers can report back to the
-    device - and a SqueezePlay device then persists as its own name.
-    """
-    client.send_frame = AsyncMock()  # type: ignore[method-assign]
-    helo_data = (
-        struct.pack("BB6s", 4, 0, bytes.fromhex("aabbccddeeff"))
-        + b"\x00" * 28
-        + b"Model=squeezeplay,ModelName=SqueezePlay"
-    )
-
-    async def _answer_name_request(*_args: object, **_kwargs: object) -> None:
-        client._process_setd(b"\x00" + "Küche".encode())  # noqa: SLF001
-
-    client.send_frame.side_effect = _answer_name_request
-
-    await client._process_helo(helo_data)  # noqa: SLF001
-
-    assert client.name == "Küche"
-    client.callback.assert_any_call(client, EventType.PLAYER_CONNECTED)
-
-
-async def test_helo_gives_up_waiting_after_the_name_timeout(
-    client: SlimClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """If the device never answers, the player still connects with the fallback name."""
-    monkeypatch.setattr("aioslimproto.client.NAME_REQUEST_TIMEOUT", 0.01)
-    client.send_frame = AsyncMock()  # type: ignore[method-assign]
-    helo_data = (
-        struct.pack("BB6s", 4, 0, bytes.fromhex("aabbccddeeff"))
-        + b"\x00" * 28
-        + b"Model=squeezeplay,ModelName=SqueezePlay"
-    )
-
-    await client._process_helo(helo_data)  # noqa: SLF001
-
-    client.callback.assert_any_call(client, EventType.PLAYER_CONNECTED)

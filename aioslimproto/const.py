@@ -34,8 +34,10 @@ JIFFIES_EPOCH_MAX_ADJUST = 0.005
 # Player::jiffiesToTimestamp
 PACKET_LATENCY = 0.002  # s
 
-# per-player sync defaults (Player.pm; Squeezebox2 uses 10ms)
+# per-player sync defaults. Player.pm base (software players and unknown
+# devices); Squeezebox2.pm uses the tighter value for Squeezebox2-class hardware.
 DEFAULT_MIN_SYNC_ADJUST = 30  # ms
+HARDWARE_MIN_SYNC_ADJUST = 10  # ms
 DEFAULT_PLAY_DELAY = 0  # ms
 DEFAULT_START_DELAY = 0  # ms
 
